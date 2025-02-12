@@ -35,6 +35,8 @@ jobs:
         patch -d dotnet/src/runtime -p1 -i ${{ github.workspace }}/runtime.diff
         wget https://github.com/dotnet/aspnetcore/commit/b2f804b21ea70ba3479210a16f41de3898c5da5f.patch
         patch -d dotnet/src/aspnetcore -p1 -i ${{ github.workspace }}/b2f804b21ea70ba3479210a16f41de3898c5da5f.patch
+        wget https://github.com/dotnet/aspnetcore/commit/a44df9b2312c2daf664ddb55b64243717e2ca80b.patch
+        patch -d dotnet/src/aspnetcore -p1 -i ${{ github.workspace }}/a44df9b2312c2daf664ddb55b64243717e2ca80b.patch
 
     - name: Build
       run: |
