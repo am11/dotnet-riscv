@@ -23,8 +23,30 @@ jobs:
         remove-codeql: 'true'
         remove-cached-tools: 'true'        
 
-    - name: Clone repository
+    - name: Clone repository for bootstrap
       run: |
+        git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
+
+    - name: Apply patches for bootstrap
+      run: |
+        wget https://patch-diff.githubusercontent.com/raw/dotnet/sdk/pull/46720.diff
+        patch -d dotnet -p4 -i ${{ github.workspace }}/46720.diff
+        wget https://patch-diff.githubusercontent.com/raw/dotnet/runtime/pull/112414.diff
+        patch -d dotnet/src/runtime -p1 -i ${{ github.workspace }}/112414.diff
+        wget https://patch-diff.githubusercontent.com/raw/dotnet/aspnetcore/pull/60336.diff
+        patch -d dotnet/src/aspnetcore -p1 -i ${{ github.workspace }}/60336.diff
+
+    - name: Build bootstrap
+      run: |
+        mkdir ${{ github.workspace }}/pkgs
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/pkgs:/pkgs -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 -e DISABLE_CROSSGEN=1 \
+          mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-riscv64 \
+          sh -c './prep-source-build.sh && ./build.sh --clean-while-building -sb --two-stage-runtime-build /p:TargetOS=linux /p:TargetArchitecture=riscv64 /p:Crossbuild=true &&
+            find artifacts/packages/Release -type f -name "*.nupkg" -exec mv {} /pkgs \;'
+
+    - name: Cleanup and re-clone repository
+      run: |
+        sudo rm -rf ${{ github.workspace }}/dotnet
         git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
 
     - name: Apply patches
@@ -38,12 +60,12 @@ jobs:
 
     - name: Build
       run: |
-        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 -e DISABLE_CROSSGEN=1 \
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/pkgs:/pkgs -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 -e DISABLE_CROSSGEN=1 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-riscv64 \
-          sh -c 'cd /dotnet && ./prep-source-build.sh && ./build.sh --clean-while-building -sb --two-stage-runtime-build /p:TargetOS=linux /p:TargetArchitecture=riscv64 /p:Crossbuild=true'
+          sh -c './prep-source-build.sh && ./build.sh --clean-while-building -sb --with-packages /pkgs /p:TargetOS=linux /p:TargetArchitecture=riscv64 /p:Crossbuild=true'
 
     - name: Upload .NET
       uses: actions/upload-artifact@v4
       with:
         name: dotnet-sdk-linux-riscv64
-        path: "${{ github.workspace }}/dotnet/artifacts/assets/Release/dotnet-sdk-*"
+        path: "dotnet/artifacts/assets/Release/dotnet-sdk-*"
