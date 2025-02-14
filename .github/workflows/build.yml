@@ -48,6 +48,7 @@ jobs:
       run: |
         sudo rm -rf ${{ github.workspace }}/dotnet
         git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
+        mkdir -p ${{ github.workspace }}/dotnet/prereqs/packages/reference/
 
     - name: Apply patches
       run: |
