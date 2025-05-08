@@ -29,7 +29,6 @@ jobs:
         git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
 
     - name: Apply patches
-      if: false
       run: |
         wget -O ${{ github.workspace }}/sdk.patch https://github.com/dotnet/sdk/compare/main...am11:sdk:patch-6.patch
         patch -d dotnet/src/sdk -p1 -i ${{ github.workspace }}/sdk.patch
