@@ -28,13 +28,6 @@ jobs:
       run: |
         git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
 
-    - name: Apply patches
-      run: |
-        wget -O ${{ github.workspace }}/sdk.patch https://github.com/dotnet/sdk/compare/main...am11:sdk:patch-6.patch
-        patch -d dotnet/src/sdk -p1 -i ${{ github.workspace }}/sdk.patch
-        wget -O ${{ github.workspace }}/aspnetcore.patch https://github.com/dotnet/aspnetcore/compare/main...am11:aspnetcore:patch-1.patch
-        patch -d dotnet/src/aspnetcore -p1 -i ${{ github.workspace }}/aspnetcore.patch
-
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
