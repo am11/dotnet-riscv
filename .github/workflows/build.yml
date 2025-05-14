@@ -3,6 +3,11 @@ name: Build .NET SDK
 on:
   workflow_dispatch:
     inputs:
+      fork:
+        description: 'dotnet VMR fork name'
+        required: true
+        type: string
+        default: dotnet
       branch:
         description: 'dotnet VMR branch name'
         required: true
@@ -26,7 +31,7 @@ jobs:
 
     - name: Clone repository
       run: |
-        git clone --depth 1 -b ${{ inputs.branch }} https://github.com/dotnet/dotnet
+        git clone --depth 1 -b ${{ inputs.branch }} https://github.com/${{ inputs.fork }}/dotnet
 
     - name: Build
       run: |
