@@ -42,7 +42,6 @@ jobs:
     - name: List assets directory
       run: |
         find "${{ github.workspace }}/dotnet/artifacts"
-        cat /home/runner/work/dotnet-riscv/dotnet-riscv/dotnet/artifacts/staging/assets/Release/Sdk/10.0.100-preview.5/productCommit-linux-riscv64.json
 
     - name: Upload .NET
       uses: actions/upload-artifact@v4
