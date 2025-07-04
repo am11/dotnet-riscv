@@ -38,9 +38,9 @@ jobs:
 
     - name: Build
       run: |
-        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
-          mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-riscv64 \
-            ./build.sh --clean-while-building --prep -sb --os linux --arch riscv64 -p:OfficialBuildId=$(date +%Y%m%d).99
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/loongarch64 \
+          mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-loongarch64 \
+            ./build.sh --clean-while-building --prep -sb --os linux --arch loongarch64 -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
       run: |
@@ -49,7 +49,7 @@ jobs:
     - name: Upload .NET
       uses: actions/upload-artifact@v4
       with:
-        name: dotnet-sdk-linux-riscv64
+        name: dotnet-sdk-linux-loongarch64
         path: |
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
 
