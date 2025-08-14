@@ -68,6 +68,8 @@ jobs:
         # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
         sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-linux-.+\.tar\.gz/\1/')
 
+        echo ">>>>>>>> thissss"
+        cat $(find ${{ github.workspace }}/dotnet/artifacts/assets/Release/Runtime -name diag.txt | head -n1)
         artifacts=" -a $sdk_path"
         tag_name="$sdk_version"
 
