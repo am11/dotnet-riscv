@@ -43,7 +43,7 @@ jobs:
             ./build.sh --clean-while-building --prep -sb --os linux --arch riscv64 -p:OfficialBuildId=$(date +%Y%m%d).99
 
         echo ">>>>>>>> thissss"
-        cat $(find ${{ github.workspace }}/dotnet/artifacts/assets/Release/Runtime -name diag.txt | head -n1)
+        cat $(find ${{ github.workspace }}/dotnet/artifacts -name diag.txt | head -n1)
 
     - name: List assets directory
       run: |
