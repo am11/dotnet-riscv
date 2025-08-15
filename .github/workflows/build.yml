@@ -39,10 +39,8 @@ jobs:
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
-          mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-riscv64 sh -c '
+          mcr.microsoft.com/dotnet-buildtools/prereqs:azurelinux-3.0-net10.0-cross-riscv64 \
             ./build.sh --clean-while-building --prep -sb --os linux --arch riscv64 -p:OfficialBuildId=$(date +%Y%m%d).99;
-                    echo ">>>>>>>> thissss";
-        cat /tmp/diag.txt;'
 
     - name: List assets directory
       run: |
