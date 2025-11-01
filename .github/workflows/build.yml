@@ -52,6 +52,7 @@ jobs:
         name: dotnet-sdk-linux-riscv64
         path: |
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
+          ${{ github.workspace }}/dotnet/artifacts/packages/Release/NonShipping/runtime/runtime.linux-riscv64.Microsoft.DotNet.Cdac.Transport.*.nupkg
 
     - name: Make release
       if: ${{ inputs.release }}
@@ -69,6 +70,8 @@ jobs:
         sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-linux-.+\.tar\.gz/\1/')
 
         artifacts=" -a $sdk_path"
+        artifacts+=" -a $(find ${{ github.workspace }}/dotnet/artifacts/packages/Release/NonShipping/runtime -name 'runtime.linux-riscv64.Microsoft.DotNet.Cdac.Transport.*.nupkg' ! -name '*symbols.nupkg' | head -n1)"
+
         tag_name="$sdk_version"
 
         echo "tag_name: $tag_name"
