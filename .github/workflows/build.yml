@@ -22,10 +22,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: linux-riscv64
+          - name: linux
             libc: glibc
             docker_tag: azurelinux-3.0-net10.0-cross-riscv64
-          - name: linux-musl-riscv64
+          - name: linux-musl
             libc: musl
             docker_tag: azurelinux-3.0-net10.0-cross-riscv64-musl
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
-            ./build.sh --clean-while-building --prep -sb --os linux --arch riscv64 -p:OfficialBuildId=$(date +%Y%m%d).99
+            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --arch riscv64 -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
       run: |
