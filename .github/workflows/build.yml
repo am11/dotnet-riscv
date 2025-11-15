@@ -45,6 +45,10 @@ jobs:
       run: |
         git clone --single-branch --depth 1 -b ${{ inputs.branch }} https://github.com/${{ inputs.fork }}/dotnet
 
+    - name: Apply patches
+      run: |
+        curl -sSL https://github.com/dotnet/runtime/pull/121662.patch | git -C dotnet/src/runtime apply
+
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
