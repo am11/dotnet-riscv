@@ -47,8 +47,9 @@ jobs:
 
     - name: Apply patches
       run: |
-        curl -sSL https://github.com/dotnet/runtime/pull/121662.patch | git -C dotnet/src/runtime apply -p4 || true
-        git -C dotnet/src/runtime status
+        curl -sSLO https://github.com/dotnet/runtime/pull/121662.patch
+        patch -d dotnet/src/runtime -p1 -i ${{ github.workspace }}/121662.patch || true
+        git -C dotnet status
 
     - name: Build
       run: |
