@@ -44,6 +44,7 @@ jobs:
     - name: Clone repository
       run: |
         git clone --single-branch --depth 1 -b ${{ inputs.branch }} https://github.com/${{ inputs.fork }}/dotnet
+        git status
 
     - name: Apply patches
       run: |
