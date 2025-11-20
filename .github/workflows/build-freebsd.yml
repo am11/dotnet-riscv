@@ -55,7 +55,7 @@ jobs:
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/x64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
-              --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99 -p:CrossBuild=true
+              --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
       run: |
