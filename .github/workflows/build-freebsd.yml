@@ -27,7 +27,6 @@ jobs:
       matrix:
         include:
           - name: freebsd
-            libc: glibc
             docker_tag: azurelinux-3.0-net11.0-cross-freebsd-14-amd64
     runs-on: ubuntu-latest
     permissions:
@@ -51,7 +50,7 @@ jobs:
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/x64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
-              --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99
+              --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99 -p:CrossBuild=true
 
     - name: List assets directory
       run: |
