@@ -28,6 +28,9 @@ on:
 
 jobs:
   build:
+    env:
+      ROOTFS_DIR: /crossrootfs/riscv64
+      SHARED_COMPONENTS_DIR:
     strategy:
       matrix:
         include:
@@ -86,7 +89,9 @@ jobs:
           exit 0
         fi
 
-        mkdir -p "${{ github.workspace }}/shared-components"
+        host_shared_components_dir="${{ github.workspace }}/dotnet/.shared-components"
+        container_shared_components_dir="/dotnet/.shared-components"
+        mkdir -p "$host_shared_components_dir"
 
         releases_api="https://api.github.com/repos/${{ github.repository }}/releases?per_page=100"
         shared_components_tag=$(curl -fsSL \
@@ -120,14 +125,14 @@ jobs:
           exit 1
         fi
 
-        curl -fL "$asset_url" -o "${{ github.workspace }}/shared-components/shared-components.tar.gz"
-        tar -oxzf "${{ github.workspace }}/shared-components/shared-components.tar.gz" -C "${{ github.workspace }}/shared-components"
+        curl -fL "$asset_url" -o "$host_shared_components_dir/shared-components.tar.gz"
+        tar -oxzf "$host_shared_components_dir/shared-components.tar.gz" -C "$host_shared_components_dir"
 
-        echo "SHARED_COMPONENTS_DIR=${{ github.workspace }}/shared-components" >> "$GITHUB_ENV"
+        echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
     - name: Build
       run: |
-        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
               --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
