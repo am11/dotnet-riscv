@@ -114,19 +114,30 @@ jobs:
         echo "Using shared components from release tag: $shared_components_tag"
 
         release_api="https://api.github.com/repos/${{ github.repository }}/releases/tags/$shared_components_tag"
-        asset_url=$(curl -fsSL \
+        assets_json=$(curl -fsSL \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github+json" \
-          "$release_api" | \
-          jq -r '.assets[] | select(.name | test("^Private\\.SourceBuilt\\.Artifacts\\..*\\.tar\\.gz$")) | .browser_download_url' | head -n 1)
+          "$release_api")
 
-        if [ -z "$asset_url" ] || [ "$asset_url" = "null" ]; then
+        private_asset_count=$(echo "$assets_json" | jq -r '[.assets[] | select(.name | test("^Private\\.SourceBuilt\\.Artifacts\\..*\\.tar\\.gz$"))] | length')
+        symbols_asset_count=$(echo "$assets_json" | jq -r '[.assets[] | select(.name | test("^dotnet-symbols-all-.*\\.tar\\.gz$"))] | length')
+
+        if [ "$private_asset_count" -eq 0 ]; then
           echo "No Private.SourceBuilt.Artifacts.*.tar.gz asset found in release tag '$shared_components_tag'"
           exit 1
         fi
 
-        curl -fL "$asset_url" -o "$host_shared_components_dir/shared-components.tar.gz"
-        tar -oxzf "$host_shared_components_dir/shared-components.tar.gz" -C "$host_shared_components_dir"
+        if [ "$symbols_asset_count" -eq 0 ]; then
+          echo "No dotnet-symbols-all-*.tar.gz asset found in release tag '$shared_components_tag'"
+          echo "Rebuild/release ${major}.0.1xx with symbol archives uploaded so 2xx/3xx/4xx can consume shared components."
+          exit 1
+        fi
+
+        echo "$assets_json" | jq -r '.assets[] | select(.name | test("^Private\\.SourceBuilt\\.Artifacts\\..*\\.tar\\.gz$|^dotnet-symbols-all-.*\\.tar\\.gz$")) | [.name, .browser_download_url] | @tsv' | \
+          while IFS=$'\t' read -r asset_name asset_url; do
+            echo "Downloading $asset_name"
+            curl -fL "$asset_url" -o "$host_shared_components_dir/$asset_name"
+          done
 
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
@@ -148,6 +159,7 @@ jobs:
         name: dotnet-sdk-${{ matrix.name }}
         path: |
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
+          ${{ github.workspace }}/dotnet/artifacts/assets/Release/dotnet-symbols-all-*.tar.gz
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Private.SourceBuilt.Artifacts.*.tar.gz
 
   release:
@@ -171,6 +183,7 @@ jobs:
         cd repo
 
         sdk_paths=$(find ${{ github.workspace }}/artifacts -name 'dotnet-sdk-*.tar.gz')
+        symbols_paths=$(find ${{ github.workspace }}/artifacts -name 'dotnet-symbols-all-*.tar.gz')
         source_built_artifact_paths=$(find ${{ github.workspace }}/artifacts -name 'Private.SourceBuilt.Artifacts.*.tar.gz')
         artifacts=""
         for sdk_path in $sdk_paths; do
@@ -183,6 +196,10 @@ jobs:
 
         for source_built_artifact_path in $source_built_artifact_paths; do
           artifacts="$artifacts -a $source_built_artifact_path"
+        done
+
+        for symbols_path in $symbols_paths; do
+          artifacts="$artifacts -a $symbols_path"
         done
 
         echo "tag_name: $tag_name"
