@@ -184,6 +184,6 @@ jobs:
         echo "artifacts: $artifacts"
 
         # docs: https://hub.github.com/hub-release.1.html
-        hub release create $artifacts --prerelease -m "$tag_name" "$tag_name"
+        hub release create $artifacts ${{ inputs.branding != 'release' && '--prerelease' || '' }} -m "$tag_name" "$tag_name"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
