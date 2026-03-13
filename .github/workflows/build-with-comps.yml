@@ -75,6 +75,7 @@ jobs:
       run: |
         set -euo pipefail
         branch="${{ inputs.branch }}"
+        asset_suffix="${{ matrix.name }}-riscv64"
 
         if [[ ! "$branch" =~ ^v?([0-9]+)\.0\.([0-9])[0-9]{2}($|[.-]) ]]; then
           echo "Branch '$branch' is not a feature-band branch; skipping shared components."
@@ -119,25 +120,66 @@ jobs:
           -H "Accept: application/vnd.github+json" \
           "$release_api")
 
-        private_asset_count=$(echo "$assets_json" | jq -r '[.assets[] | select(.name | test("^Private\\.SourceBuilt\\.Artifacts\\..*\\.tar\\.gz$"))] | length')
-        symbols_asset_count=$(echo "$assets_json" | jq -r '[.assets[] | select(.name | test("^dotnet-symbols-all-.*\\.tar\\.gz$"))] | length')
+        private_asset_name=$(echo "$assets_json" | jq -r --arg suffix "$asset_suffix" '
+          [.assets[]
+            | select(
+                (.name | startswith("Private.SourceBuilt.Artifacts."))
+                and (.name | endswith("." + $suffix + ".tar.gz"))
+              )
+          ][0].name // empty
+        ')
+        private_asset_url=$(echo "$assets_json" | jq -r --arg suffix "$asset_suffix" '
+          [.assets[]
+            | select(
+                (.name | startswith("Private.SourceBuilt.Artifacts."))
+                and (.name | endswith("." + $suffix + ".tar.gz"))
+              )
+          ][0].browser_download_url // empty
+        ')
 
-        if [ "$private_asset_count" -eq 0 ]; then
-          echo "No Private.SourceBuilt.Artifacts.*.tar.gz asset found in release tag '$shared_components_tag'"
+        if [ -z "$private_asset_name" ] || [ -z "$private_asset_url" ]; then
+          echo "No Private.SourceBuilt.Artifacts.*.$asset_suffix.tar.gz asset found in release tag '$shared_components_tag'"
           exit 1
         fi
 
-        if [ "$symbols_asset_count" -eq 0 ]; then
-          echo "No dotnet-symbols-all-*.tar.gz asset found in release tag '$shared_components_tag'"
-          echo "Rebuild/release ${major}.0.1xx with symbol archives uploaded so 2xx/3xx/4xx can consume shared components."
-          exit 1
-        fi
+        private_asset_path="$host_shared_components_dir/$private_asset_name"
+        echo "Downloading $private_asset_name"
+        curl -fL "$private_asset_url" -o "$private_asset_path"
 
-        echo "$assets_json" | jq -r '.assets[] | select(.name | test("^Private\\.SourceBuilt\\.Artifacts\\..*\\.tar\\.gz$|^dotnet-symbols-all-.*\\.tar\\.gz$")) | [.name, .browser_download_url] | @tsv' | \
-          while IFS=$'\t' read -r asset_name asset_url; do
-            echo "Downloading $asset_name"
-            curl -fL "$asset_url" -o "$host_shared_components_dir/$asset_name"
-          done
+        echo "Extracting $private_asset_name"
+        tar -xzf "$private_asset_path" -C "$host_shared_components_dir"
+        rm -f "$private_asset_path"
+
+        # Some releases may not embed dotnet-symbols-all inside the artifacts archive.
+        # Ensure it exists under assets/Release so init-source-only can consume it.
+        if ! compgen -G "$host_shared_components_dir/assets/Release/dotnet-symbols-all-*-$asset_suffix.tar.gz" > /dev/null; then
+          symbols_asset_name=$(echo "$assets_json" | jq -r --arg suffix "$asset_suffix" '
+            [.assets[]
+              | select(
+                  (.name | startswith("dotnet-symbols-all-"))
+                  and (.name | endswith("-" + $suffix + ".tar.gz"))
+                )
+            ][0].name // empty
+          ')
+          symbols_asset_url=$(echo "$assets_json" | jq -r --arg suffix "$asset_suffix" '
+            [.assets[]
+              | select(
+                  (.name | startswith("dotnet-symbols-all-"))
+                  and (.name | endswith("-" + $suffix + ".tar.gz"))
+                )
+            ][0].browser_download_url // empty
+          ')
+
+          if [ -z "$symbols_asset_name" ] || [ -z "$symbols_asset_url" ]; then
+            echo "No dotnet-symbols-all-*-$asset_suffix.tar.gz asset found in release tag '$shared_components_tag'"
+            echo "Rebuild/release ${major}.0.1xx with symbol archives uploaded so 2xx/3xx/4xx can consume shared components."
+            exit 1
+          fi
+
+          mkdir -p "$host_shared_components_dir/assets/Release"
+          echo "Downloading $symbols_asset_name"
+          curl -fL "$symbols_asset_url" -o "$host_shared_components_dir/assets/Release/$symbols_asset_name"
+        fi
 
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
