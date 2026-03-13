@@ -192,7 +192,7 @@ jobs:
     - name: Show resolved shared components
       run: |
         echo "Contents of $SHARED_COMPONENTS_DIR:"
-        find "${{ github.workspace }}/.shared-components:/shared-components"
+        find "${{ github.workspace }}/.shared-components"
 
     - name: Build
       run: |
