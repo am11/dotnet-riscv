@@ -187,6 +187,45 @@ jobs:
           exit 1
         fi
 
+        ensure_host_runtime_tool_package() {
+          local managed_pkg_prefix="$1"
+          local runtime_pkg_prefix="$2"
+
+          local managed_pkg_file
+          managed_pkg_file=$(find "$host_shared_components_dir" -maxdepth 1 -type f -name "${managed_pkg_prefix}.*.nupkg" | head -n 1 || true)
+          if [ -z "$managed_pkg_file" ]; then
+            echo "No ${managed_pkg_prefix}.*.nupkg found under $host_shared_components_dir"
+            exit 1
+          fi
+
+          local managed_pkg_file_name
+          managed_pkg_file_name=$(basename "$managed_pkg_file")
+          local managed_pkg_version="${managed_pkg_file_name#${managed_pkg_prefix}.}"
+          managed_pkg_version="${managed_pkg_version%.nupkg}"
+          if [ -z "$managed_pkg_version" ] || [ "$managed_pkg_version" = "$managed_pkg_file_name" ]; then
+            echo "Could not parse version from $managed_pkg_file_name"
+            exit 1
+          fi
+
+          local runtime_pkg_name="${runtime_pkg_prefix}.${managed_pkg_version}.nupkg"
+          if compgen -G "$host_shared_components_dir/$runtime_pkg_name" > /dev/null; then
+            return
+          fi
+
+          local runtime_pkg_prefix_lower
+          runtime_pkg_prefix_lower=$(echo "$runtime_pkg_prefix" | tr '[:upper:]' '[:lower:]')
+          local managed_pkg_version_lower
+          managed_pkg_version_lower=$(echo "$managed_pkg_version" | tr '[:upper:]' '[:lower:]')
+          local runtime_pkg_url="https://api.nuget.org/v3-flatcontainer/${runtime_pkg_prefix_lower}/${managed_pkg_version_lower}/${runtime_pkg_prefix_lower}.${managed_pkg_version_lower}.nupkg"
+
+          echo "Downloading missing host runtime package $runtime_pkg_name"
+          curl -fL "$runtime_pkg_url" -o "$host_shared_components_dir/$runtime_pkg_name"
+        }
+
+        # Source-build-reference-packages resolves ILAsm/ILDAsm for linux-x64 host tooling.
+        ensure_host_runtime_tool_package "Microsoft.NETCore.ILAsm" "runtime.linux-x64.Microsoft.NETCore.ILAsm"
+        ensure_host_runtime_tool_package "Microsoft.NETCore.ILDAsm" "runtime.linux-x64.Microsoft.NETCore.ILDAsm"
+
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
     - name: Show resolved shared components
