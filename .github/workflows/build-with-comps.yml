@@ -90,8 +90,9 @@ jobs:
           exit 0
         fi
 
-        host_shared_components_dir="${{ github.workspace }}/dotnet/.shared-components"
-        container_shared_components_dir="/dotnet/.shared-components"
+        host_shared_components_dir="${{ github.workspace }}/.shared-components"
+        container_shared_components_dir="/shared-components"
+        rm -rf "$host_shared_components_dir"
         mkdir -p "$host_shared_components_dir"
 
         releases_api="https://api.github.com/repos/${{ github.repository }}/releases?per_page=100"
@@ -181,11 +182,16 @@ jobs:
           curl -fL "$symbols_asset_url" -o "$host_shared_components_dir/assets/Release/$symbols_asset_name"
         fi
 
+        if ! compgen -G "$host_shared_components_dir/assets/Release/dotnet-symbols-all-*.tar.gz" > /dev/null; then
+          echo "No dotnet-symbols-all-*.tar.gz found under $host_shared_components_dir/assets/Release after resolving shared components"
+          exit 1
+        fi
+
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
     - name: Build
       run: |
-        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/.shared-components:/shared-components:ro -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
               --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
