@@ -191,7 +191,7 @@ jobs:
 
     - name: Build
       run: |
-        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/.shared-components:/shared-components:ro -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
+        docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/.shared-components:/shared-components -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
               --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
