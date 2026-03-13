@@ -260,6 +260,19 @@ jobs:
         ensure_exact_package_version "Microsoft.AspNetCore.App.Runtime.linux-x64" "$host_runtime_version"
         ensure_exact_package_version "Microsoft.NETCore.App.Crossgen2.linux-x64" "$host_runtime_version"
 
+        # SDK redist can require a newer runtime patch than the bootstrap SDK.
+        # Derive those versions from sdk dependency metadata and ensure they exist too.
+        sdk_runtime_version=$(sed -n 's:.*<MicrosoftNETCoreAppRefPackageVersion>\(.*\)</MicrosoftNETCoreAppRefPackageVersion>.*:\1:p' dotnet/src/sdk/eng/Version.Details.props | head -n 1)
+        sdk_aspnet_runtime_version=$(sed -n 's:.*<MicrosoftAspNetCoreAppRefPackageVersion>\(.*\)</MicrosoftAspNetCoreAppRefPackageVersion>.*:\1:p' dotnet/src/sdk/eng/Version.Details.props | head -n 1)
+        if [ -z "$sdk_runtime_version" ] || [ -z "$sdk_aspnet_runtime_version" ]; then
+          echo "Unable to parse sdk runtime versions from dotnet/src/sdk/eng/Version.Details.props"
+          exit 1
+        fi
+
+        ensure_exact_package_version "Microsoft.NETCore.App.Runtime.linux-x64" "$sdk_runtime_version"
+        ensure_exact_package_version "Microsoft.AspNetCore.App.Runtime.linux-x64" "$sdk_aspnet_runtime_version"
+        ensure_exact_package_version "Microsoft.NETCore.App.Crossgen2.linux-x64" "$sdk_runtime_version"
+
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
     - name: Show resolved shared components
