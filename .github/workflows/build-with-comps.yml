@@ -189,13 +189,18 @@ jobs:
 
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
+    - name: Show resolved shared components
+      run: |
+        echo "Contents of $SHARED_COMPONENTS_DIR:"
+        find "$SHARED_COMPONENTS_DIR"
+
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/.shared-components:/shared-components -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
               --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
-              $([ -n "${SHARED_COMPONENTS_DIR:-}" ] && echo "--with-shared-components $SHARED_COMPONENTS_DIR")
+              $([ -n "${SHARED_COMPONENTS_DIR:-}" ] && echo "--with-packages $SHARED_COMPONENTS_DIR --with-shared-components $SHARED_COMPONENTS_DIR")
 
     - name: List assets directory
       run: |
