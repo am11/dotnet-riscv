@@ -222,9 +222,43 @@ jobs:
           curl -fL "$runtime_pkg_url" -o "$host_shared_components_dir/$runtime_pkg_name"
         }
 
+        ensure_exact_package_version() {
+          local package_id="$1"
+          local package_version="$2"
+
+          local package_name="${package_id}.${package_version}.nupkg"
+          if compgen -G "$host_shared_components_dir/$package_name" > /dev/null; then
+            return
+          fi
+
+          local package_id_lower
+          package_id_lower=$(echo "$package_id" | tr '[:upper:]' '[:lower:]')
+          local package_version_lower
+          package_version_lower=$(echo "$package_version" | tr '[:upper:]' '[:lower:]')
+          local package_url="https://api.nuget.org/v3-flatcontainer/${package_id_lower}/${package_version_lower}/${package_id_lower}.${package_version_lower}.nupkg"
+
+          echo "Downloading missing package $package_name"
+          curl -fL "$package_url" -o "$host_shared_components_dir/$package_name"
+        }
+
         # Source-build-reference-packages resolves ILAsm/ILDAsm for linux-x64 host tooling.
         ensure_host_runtime_tool_package "Microsoft.NETCore.ILAsm" "runtime.linux-x64.Microsoft.NETCore.ILAsm"
         ensure_host_runtime_tool_package "Microsoft.NETCore.ILDAsm" "runtime.linux-x64.Microsoft.NETCore.ILDAsm"
+
+        # F# tooling can require linux-x64 runtime packs pinned to the bootstrap SDK's runtime patch.
+        private_source_built_sdk_version=$(sed -n 's:.*<PrivateSourceBuiltSdkVersion>\(.*\)</PrivateSourceBuiltSdkVersion>.*:\1:p' dotnet/eng/Versions.props | head -n 1)
+        private_source_built_sdk_semver="${private_source_built_sdk_version%%-*}"
+        if [[ "$private_source_built_sdk_semver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+          host_runtime_patch=$((10#${BASH_REMATCH[3]} % 100))
+          host_runtime_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${host_runtime_patch}"
+        else
+          echo "Unable to parse PrivateSourceBuiltSdkVersion from dotnet/eng/Versions.props: '$private_source_built_sdk_version'"
+          exit 1
+        fi
+
+        ensure_exact_package_version "Microsoft.NETCore.App.Runtime.linux-x64" "$host_runtime_version"
+        ensure_exact_package_version "Microsoft.AspNetCore.App.Runtime.linux-x64" "$host_runtime_version"
+        ensure_exact_package_version "Microsoft.NETCore.App.Crossgen2.linux-x64" "$host_runtime_version"
 
         echo "SHARED_COMPONENTS_DIR=$container_shared_components_dir" >> "$GITHUB_ENV"
 
