@@ -197,10 +197,22 @@ jobs:
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -v${{ github.workspace }}/.shared-components:/shared-components -w /dotnet -e ROOTFS_DIR -e SHARED_COMPONENTS_DIR \
-          mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
+          mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} /bin/bash -c '
+            set -euo pipefail
+
+            build_args=""
+            if [ -n "${SHARED_COMPONENTS_DIR:-}" ]; then
+              with_packages_dir="/tmp/previously-source-built"
+              rm -rf "$with_packages_dir"
+              mkdir -p "$with_packages_dir"
+              cp -a "$SHARED_COMPONENTS_DIR"/. "$with_packages_dir"/
+              build_args="--with-packages $with_packages_dir --with-shared-components $SHARED_COMPONENTS_DIR"
+            fi
+
             ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
               --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
-              $([ -n "${SHARED_COMPONENTS_DIR:-}" ] && echo "--with-packages $SHARED_COMPONENTS_DIR --with-shared-components $SHARED_COMPONENTS_DIR")
+              $build_args
+          '
 
     - name: List assets directory
       run: |
