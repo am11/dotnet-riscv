@@ -27,7 +27,7 @@ jobs:
       matrix:
         include:
           - name: haiku
-            docker_tag: ubuntu-22.04-cross-haiku-latest
+            docker_tag: azurelinux-3.0-net11.0-cross-haiku-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
