@@ -37,8 +37,6 @@ jobs:
       with:
         android: true
         dotnet: true
-        haskell: true
-        large-packages: true
         swap-storage: true
         tools-cache: true
 
