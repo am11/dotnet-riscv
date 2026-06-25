@@ -32,14 +32,15 @@ jobs:
     permissions:
       contents: write
     steps:
-    - name: Maximize build space
-      uses: AdityaGarg8/remove-unwanted-software@v4.1
+    - name: Free Disk Space (Ubuntu)
+      uses: insightsengineering/disk-space-reclaimer@v1
       with:
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
-        remove-cached-tools: 'true'
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        swap-storage: true
+        tools-cache: true
 
     - name: Clone repository
       run: |
