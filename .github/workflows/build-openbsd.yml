@@ -49,7 +49,7 @@ jobs:
       run: |
         curl -sSL https://patch-diff.githubusercontent.com/raw/dotnet/sdk/pull/55004.diff |\
           git -C dotnet apply -v --directory=src/sdk || true
-        git -C dotnet show
+        git -C dotnet diff
 
     - name: Build
       run: |
