@@ -47,7 +47,7 @@ jobs:
 
     - name: Apply patches
       run: |
-        curl -sSL https://github.com/dotnet/runtime/compare/main...am11:runtime:patch-55_1.diff |\
+        curl -sSL https://github.com/dotnet/runtime/pull/130478.diff |\
           git -C dotnet apply -v --directory=src/runtime || true
         git -C dotnet diff
 
