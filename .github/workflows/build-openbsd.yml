@@ -27,7 +27,11 @@ jobs:
       matrix:
         include:
           - name: openbsd
-            docker_tag: azurelinux-3.0-net11.0-cross-openbsd-amd64
+            version: "7.8"
+            docker_tag: azurelinux-3.0-net11.0-cross-openbsd-7.8-amd64
+          - name: openbsd
+            version: "7.9"
+            docker_tag: azurelinux-3.0-net11.0-cross-openbsd-7.9-amd64
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -59,7 +63,7 @@ jobs:
     - name: Upload .NET
       uses: actions/upload-artifact@v4
       with:
-        name: dotnet-sdk-${{ matrix.name }}
+        name: dotnet-sdk-${{ matrix.name }}-${{ matrix.version }}
         path: |
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
 
