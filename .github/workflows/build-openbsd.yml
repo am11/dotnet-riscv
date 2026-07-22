@@ -27,10 +27,10 @@ jobs:
       matrix:
         include:
           - name: openbsd
-            version: "7.8"
+            version: 7.8
             docker_tag: azurelinux-3.0-net11.0-cross-openbsd-7.8-amd64
           - name: openbsd
-            version: "7.9"
+            version: 7.9
             docker_tag: azurelinux-3.0-net11.0-cross-openbsd-7.9-amd64
     runs-on: ubuntu-latest
     permissions:
@@ -53,7 +53,7 @@ jobs:
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/x64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
-            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
+            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}.${{ matrix.version }}-x64 \
               --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
@@ -92,7 +92,7 @@ jobs:
         for sdk_path in $sdk_paths; do
           sdk_filename=$(basename "$sdk_path")
           # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
-          sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-openbsd-.+\.tar\.gz/\1/')
+          sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-openbsd.+\.tar\.gz/\1/')
           artifacts="$artifacts -a $sdk_path"
           tag_name="$sdk_version"
         done
