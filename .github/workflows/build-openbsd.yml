@@ -53,7 +53,7 @@ jobs:
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/x64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
-            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}.${{ matrix.version }}-x64 \
+            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
               --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
@@ -91,9 +91,20 @@ jobs:
         artifacts=""
         for sdk_path in $sdk_paths; do
           sdk_filename=$(basename "$sdk_path")
+          
+          # Extract the openbsd version suffix (e.g. "openbsd-7.8" or "openbsd-7.9") from the path
+          suffix_string=$(echo "$sdk_path" | grep -oE 'openbsd-[0-9]+\.[0-9]+')
+          
+          # Compute a unique path renaming "-openbsd-" to "-openbsd-7.8-" or "-openbsd-7.9-"
+          unique_filename=$(echo "$sdk_filename" | sed "s/-openbsd-x64/-${suffix_string}-x64/")
+          unique_path="$(dirname "$sdk_path")/$unique_filename"
+          
+          # Apply the disk rename to prevent name duplication error
+          mv "$sdk_path" "$unique_path"
+
           # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
-          sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-openbsd.+\.tar\.gz/\1/')
-          artifacts="$artifacts -a $sdk_path"
+          sdk_version=$(echo "$unique_filename" | sed -E "s/dotnet-sdk-([^-]+(-[^-]+)*)-${suffix_string}-.+\.tar\.gz/\1/")
+          artifacts="$artifacts -a $unique_path"
           tag_name="$sdk_version"
         done
 
