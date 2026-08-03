@@ -66,6 +66,7 @@ jobs:
         name: dotnet-sdk-${{ matrix.name }}-${{ matrix.version }}
         path: |
           ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
+          ${{ github.workspace }}/dotnet/artifacts/assets/Release/Private.SourceBuilt.Artifacts.*.tar.gz
 
   release:
     needs: build
@@ -86,26 +87,27 @@ jobs:
         # hub(1) requires release to be created inside a git repo
         git clone https://${{ secrets.CLONE_TOKEN }}:x-oauth-basic@github.com/${{ github.repository }}.git repo
         cd repo
-
-        sdk_paths=$(find ${{ github.workspace }}/artifacts -name 'dotnet-sdk-*.tar.gz')
+        
+        # Find both SDKs and SourceBuilt artifact tarballs
+        all_paths=$(find ${{ github.workspace }}/artifacts \( -name 'dotnet-sdk-*.tar.gz' -o -name 'Private.SourceBuilt.Artifacts.*.tar.gz' \))
         artifacts=""
-        for sdk_path in $sdk_paths; do
-          sdk_filename=$(basename "$sdk_path")
+        
+        for file_path in $all_paths; do
+          filename=$(basename "$file_path")
+          suffix_string=$(echo "$file_path" | grep -oE 'openbsd-[0-9]+\.[0-9]+')
           
-          # Extract the openbsd version suffix (e.g. "openbsd-7.8" or "openbsd-7.9") from the path
-          suffix_string=$(echo "$sdk_path" | grep -oE 'openbsd-[0-9]+\.[0-9]+')
-          
-          # Compute a unique path renaming "-openbsd-" to "-openbsd-7.8-" or "-openbsd-7.9-"
-          unique_filename=$(echo "$sdk_filename" | sed "s/-openbsd-x64/-${suffix_string}-x64/")
-          unique_path="$(dirname "$sdk_path")/$unique_filename"
-          
-          # Apply the disk rename to prevent name duplication error
-          mv "$sdk_path" "$unique_path"
+          # Handle renaming logic to insert the OpenBSD version injection
+          if [[ "$filename" == dotnet-sdk-* ]]; then
+            unique_filename=$(echo "$filename" | sed "s/-openbsd-x64/-${suffix_string}-x64/")
+            sdk_version=$(echo "$unique_filename" | sed -E "s/dotnet-sdk-([^-]+(-[^-]+)*)-${suffix_string}-.+\.tar\.gz/\1/")
+            tag_name="$sdk_version"
+          elif [[ "$filename" == Private.SourceBuilt.Artifacts.* ]]; then
+            unique_filename=$(echo "$filename" | sed "s/.openbsd-x64/.${suffix_string}-x64/")
+          fi
 
-          # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
-          sdk_version=$(echo "$unique_filename" | sed -E "s/dotnet-sdk-([^-]+(-[^-]+)*)-${suffix_string}-.+\.tar\.gz/\1/")
+          unique_path="$(dirname "$file_path")/$unique_filename"
+          mv "$file_path" "$unique_path"
           artifacts="$artifacts -a $unique_path"
-          tag_name="$sdk_version"
         done
 
         echo "tag_name: $tag_name"
