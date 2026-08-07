@@ -38,6 +38,12 @@ jobs:
 
           using NuGet.Versioning;
           using System.Text.Json;
+          using System.Text.Json.Serialization;
+
+          public record BuildItem(string tag, string branding);
+
+          [JsonSerializable(typeof(List<BuildItem>))]
+          internal partial class BuildItemContext : JsonSerializerContext { }
 
           var upstreamTags = File.ReadAllLines(args[0]);
           var localTags = File.ReadAllLines(args[1]);
@@ -67,7 +73,7 @@ jobs:
               .Select(Normalize)
               .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-          var builds = new List<object>();
+          var builds = new List<BuildItem>();
 
           foreach (var raw in upstreamTags)
           {
@@ -96,14 +102,11 @@ jobs:
               if (built.Contains(normalized))
                   continue;
 
-              builds.Add(new
-              {
-                  tag = raw,
-                  branding = version.IsPrerelease ? "preview" : "release"
-              });
+              builds.Add(new BuildItem(raw, version.IsPrerelease ? "preview" : "release"));
           }
 
-          File.WriteAllText("/tmp/tags.json", JsonSerializer.Serialize(builds));
+          string json = JsonSerializer.Serialize(builds, BuildItemContext.Default.ListBuildItem);
+          File.WriteAllText("/tmp/tags.json", json);
           EOF
 
           jq . /tmp/tags.json
