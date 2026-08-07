@@ -114,12 +114,10 @@ jobs:
           count=$(jq length /tmp/tags.json)
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
-          cat /tmp/tags.json
-
       - name: Trigger builds
         if: steps.builds.outputs.count != '0'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -133,7 +131,7 @@ jobs:
 
             curl -fsSL \
               -X POST \
-              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
               -d @- <<EOF
