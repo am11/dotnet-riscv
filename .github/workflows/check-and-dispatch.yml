@@ -1,0 +1,149 @@
+name: Check Upstream Tags and Trigger Build
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  check-tags:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            https://api.github.com/repos/dotnet/dotnet/tags?per_page=100 |
+            jq -r '.[].name' > upstream-tags.txt
+
+          git fetch --tags
+
+          git tag > local-tags.txt
+
+      - name: Determine builds
+        id: builds
+        run: |
+          dotnet run - -- upstream-tags.txt local-tags.txt > builds.json <<'EOF'
+          #:package NuGet.Versioning
+
+          using NuGet.Versioning;
+          using System.Text.Json;
+
+          var upstreamTags = File.ReadAllLines(args[0]);
+          var localTags = File.ReadAllLines(args[1]);
+
+          static string Normalize(string tag)
+          {
+              tag = tag.TrimStart('v');
+
+              if (NuGetVersion.TryParse(tag, out var version))
+              {
+                  if (version.IsPrerelease)
+                  {
+                      var first = version.ReleaseLabels.First();
+                      var second = version.ReleaseLabels.Skip(1).FirstOrDefault();
+
+                      if ((first == "preview" || first == "rc") && second != null)
+                          return $"{version.Major}.{version.Minor}.{version.Patch}-{first}.{second}";
+                  }
+
+                  return version.ToNormalizedString();
+              }
+
+              return tag;
+          }
+
+          var built = localTags
+              .Select(Normalize)
+              .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+          var builds = new List<object>();
+
+          foreach (var raw in upstreamTags)
+          {
+              if (!NuGetVersion.TryParse(raw.TrimStart('v'), out var version))
+                  continue;
+
+              if (version.Major < 10)
+                  continue;
+
+              if (version.Minor != 0)
+                  continue;
+
+              if (version.Patch < 100 || version.Patch >= 200)
+                  continue;
+
+              if (version.IsPrerelease)
+              {
+                  var label = version.ReleaseLabels.FirstOrDefault();
+
+                  if (label is not ("preview" or "rc"))
+                      continue;
+              }
+
+              var normalized = Normalize(raw);
+
+              if (built.Contains(normalized))
+                  continue;
+
+              builds.Add(new
+              {
+                  tag = raw,
+                  branding = version.IsPrerelease ? "preview" : "release"
+              });
+          }
+
+          Console.WriteLine(JsonSerializer.Serialize(builds));
+          EOF
+
+          count=$(jq length builds.json)
+
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          cat builds.json
+
+      - name: Trigger builds
+        if: steps.builds.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          jq -c '.[]' builds.json |
+          while read -r build; do
+
+            tag=$(jq -r '.tag' <<<"$build")
+            branding=$(jq -r '.branding' <<<"$build")
+
+            echo "Dispatching $tag ($branding)"
+
+            curl -fsSL \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+              -d @- <<EOF
+{
+  "ref": "main",
+  "inputs": {
+    "fork": "dotnet",
+    "branch": "$tag",
+    "branding": "$branding",
+    "release": true
+  }
+}
+EOF
+
+            sleep 5
+
+          done
