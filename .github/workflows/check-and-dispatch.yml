@@ -40,11 +40,6 @@ jobs:
           using System.Text.Json;
           using System.Text.Json.Serialization;
 
-          public record BuildItem(string tag, string branding);
-
-          [JsonSerializable(typeof(List<BuildItem>))]
-          internal partial class BuildItemContext : JsonSerializerContext { }
-
           var upstreamTags = File.ReadAllLines(args[0]);
           var localTags = File.ReadAllLines(args[1]);
 
@@ -107,6 +102,11 @@ jobs:
 
           string json = JsonSerializer.Serialize(builds, BuildItemContext.Default.ListBuildItem);
           File.WriteAllText("/tmp/tags.json", json);
+
+          public record BuildItem(string tag, string branding);
+
+          [JsonSerializable(typeof(List<BuildItem>))]
+          internal partial class BuildItemContext : JsonSerializerContext { }
           EOF
 
           jq . /tmp/tags.json
