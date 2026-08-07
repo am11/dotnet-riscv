@@ -33,7 +33,7 @@ jobs:
       - name: Determine builds
         id: builds
         run: |
-          dotnet run - -- upstream-tags.txt local-tags.txt > builds.json <<'EOF'
+          dotnet run - -- upstream-tags.txt local-tags.txt <<'EOF'
           #:package NuGet.Versioning
 
           using NuGet.Versioning;
