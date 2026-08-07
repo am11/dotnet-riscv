@@ -34,7 +34,7 @@ jobs:
         id: builds
         run: |
           dotnet run - -- upstream-tags.txt local-tags.txt <<'EOF'
-          #:package NuGet.Versioning
+          #:package NuGet.Versioning@*
 
           using NuGet.Versioning;
           using System.Text.Json;
@@ -103,14 +103,15 @@ jobs:
               });
           }
 
-          Console.WriteLine(JsonSerializer.Serialize(builds));
+          File.WriteAllText("/tmp/tags.json", JsonSerializer.Serialize(builds));
           EOF
 
-          count=$(jq length builds.json)
+          jq . /tmp/tags.json
 
+          count=$(jq length /tmp/tags.json)
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
-          cat builds.json
+          cat /tmp/tags.json
 
       - name: Trigger builds
         if: steps.builds.outputs.count != '0'
@@ -119,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          jq -c '.[]' builds.json |
+          jq -c '.[]' /tmp/tags.json |
           while read -r build; do
 
             tag=$(jq -r '.tag' <<<"$build")
