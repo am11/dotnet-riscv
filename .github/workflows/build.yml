@@ -39,18 +39,13 @@ jobs:
           - name: linux-musl
             libc: musl
             docker_tag: azurelinux-3.0-net10.0-cross-riscv64-musl
+
     runs-on: ubuntu-latest
+
     permissions:
       contents: write
-    steps:
-    - name: Show workflow inputs
-      run: |
-        echo "Workflow inputs:"
-        echo "fork: ${{ inputs.fork }}"
-        echo "branch: ${{ inputs.branch }}"
-        echo "branding: ${{ inputs.branding }}"
-        echo "release: ${{ inputs.release }}"
 
+    steps:
     - name: Maximize build space
       uses: AdityaGarg8/remove-unwanted-software@v4.1
       with:
@@ -64,22 +59,22 @@ jobs:
       run: |
         git clone --single-branch --depth 1 -b ${{ inputs.branch }} https://github.com/${{ inputs.fork }}/dotnet
 
-    - name: Apply patches
-      run: |
-        # needed for .NET 10 linux-musl-riscv64, remove it once we move on from .NET 10
-        curl -sSL https://github.com/am11/runtime/commit/fa6e00abe9be4a451d81a29309c933435db8fe40.patch |\
-          git -C dotnet/ apply -v --directory=src/runtime || true
-        # needed to pin down to rv64gc baseline; as Ubuntu's clang moved their baseline to include V-extension among others.
-        # remove once we move past .NET 10
-        curl -sSL https://github.com/am11/dotnet/commit/e2780ca2fda22f0476eb719af027af0b676e554a.patch |\
-          git -C dotnet/ apply -v || true
-
     - name: Build
       run: |
+        major_version=$(echo "${{ inputs.branch }}" | sed -E 's/^v?([0-9]+)\..*/\1/')
+
+        branding_arg=""
+        if [ "$major_version" -ge 11 ]; then
+          branding_arg="--branding ${{ inputs.branding }}"
+        fi
+
+        echo "Major version: $major_version"
+        echo "Branding argument: $branding_arg"
+
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/riscv64 \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
-            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 \
-              --arch riscv64 --branding ${{ inputs.branding }} -p:OfficialBuildId=$(date +%Y%m%d).99
+            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-riscv64 --arch riscv64 \
+              $branding_arg -p:OfficialBuildId=$(date +%Y%m%d).99
 
     - name: List assets directory
       run: |
@@ -95,37 +90,50 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    if: always() && inputs.release
+
     permissions:
       contents: write
-    if: ${{ inputs.release }}
+
     steps:
     - name: Download artifacts
+      if: needs.build.result == 'success'
       uses: actions/download-artifact@v4
       with:
         path: artifacts
 
-    - name: Make release
+    - name: Make release (Success)
+      if: needs.build.result == 'success'
       run: |
-        sudo apt install -y hub
+        sdk_paths=$(find "${{ github.workspace }}/artifacts" -name 'dotnet-sdk-*.tar.gz')
 
-        # hub(1) requires release to be created inside a git repo
-        git clone https://${{ secrets.CLONE_TOKEN }}:x-oauth-basic@github.com/${{ github.repository }}.git repo
-        cd repo
-
-        sdk_paths=$(find ${{ github.workspace }}/artifacts -name 'dotnet-sdk-*.tar.gz')
         artifacts=""
+        tag_name=""
+
         for sdk_path in $sdk_paths; do
           sdk_filename=$(basename "$sdk_path")
-          # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
           sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-linux-.+\.tar\.gz/\1/')
-          artifacts="$artifacts -a $sdk_path"
+          artifacts="$artifacts $sdk_path"
           tag_name="$sdk_version"
         done
 
         echo "tag_name: $tag_name"
         echo "artifacts: $artifacts"
 
-        # docs: https://hub.github.com/hub-release.1.html
-        hub release create $artifacts --prerelease -m "$tag_name" "$tag_name"
+        if [ "${{ inputs.branding }}" = "release" ]; then
+          gh release create "$tag_name" $artifacts --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "$tag_name" --notes "$tag_name"
+        else
+          gh release create "$tag_name" $artifacts --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "$tag_name" --notes "$tag_name" --prerelease
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create failed tag
+      if: needs.build.result == 'failure' || failure()
+      run: |
+        tag_name="${{ inputs.branch }}.${{ github.run_id }}.failed"
+        echo "tag_name: $tag_name"
+
+        gh api repos/${{ github.repository }}/git/refs -f ref="refs/tags/$tag_name" -f sha="${{ github.sha }}"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
