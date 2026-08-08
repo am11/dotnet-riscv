@@ -140,6 +140,7 @@ jobs:
             branding=$(jq -r '.branding' <<<"$build")
 
             echo "Dispatching $tag ($branding)"
+            exit 1
 
             gh workflow run build.yml \
               --ref main \
