@@ -68,11 +68,6 @@ jobs:
           branding_arg="--branding ${{ inputs.branding }}"
         fi
 
-        if [ -n "${{ inputs.branding }}" ]; then
-          echo "Intentional failure for testing"
-          exit 1
-        fi
-
         echo "Major version: $major_version"
         echo "Branding argument: $branding_arg"
 
