@@ -64,8 +64,13 @@ jobs:
         major_version=$(echo "${{ inputs.branch }}" | sed -E 's/^v?([0-9]+)\..*/\1/')
 
         branding_arg=""
-        if [ "$major_version" -ge 11 ]; then
+        if [[ "$major_version" =~ ^[0-9]+$ ]] && [ "$major_version" -ge 11 ]; then
           branding_arg="--branding ${{ inputs.branding }}"
+        fi
+
+        if [ -n "${{ inputs.branding }}" ]; then
+          echo "Intentional failure for testing"
+          exit 1
         fi
 
         echo "Major version: $major_version"
