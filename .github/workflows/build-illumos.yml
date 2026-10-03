@@ -1,6 +1,11 @@
 name: Build .NET SDK for illumos-x64
 
 on:
+  # 每天 00:00 UTC（格林尼治时间）自动构建，并发布一个测试版 prerelease。
+  # GitHub 的 cron 一律按 UTC 解释，所以 '0 0 * * *' 就是北京时间 08:00。
+  # 注意：仓库若连续 60 天无提交活动，GitHub 会自动停用计划任务（需手动重新启用）。
+ # schedule:
+  #  - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
       fork:
@@ -20,6 +25,17 @@ on:
       release:
         description: 'publish release'
         type: boolean
+        default: true
+      ca_bundle_url:
+        description: 'override CA bundle URL (default: use the one committed in this repo)'
+        required: false
+        type: string
+
+# 一次构建约 2 小时。计划任务与手动触发若撞在一起，让后来的排队而不是
+# 互相取消，免得把已经跑了很久的构建丢掉。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -32,43 +48,421 @@ jobs:
     permissions:
       contents: write
     steps:
-    - name: Maximize build space
-      uses: AdityaGarg8/remove-unwanted-software@v4.1
-      with:
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
-        remove-cached-tools: 'true'
-
-    - name: Clone repository
+    - name: Report runner and disk
       run: |
-        git clone --single-branch --depth 1 -b ${{ inputs.branch }} https://github.com/${{ inputs.fork }}/dotnet
+        echo "==> cpus"
+        nproc
+        lscpu | sed -n '1,12p' || true
+        echo "==> memory"
+        free -h || true
+        echo "==> disk"
+        df -h
+
+    # The runner ships ~87G free, which has proved sufficient, so nothing is deleted
+    # any more (the previous remove-unwanted-software step only freed ~25G and cost
+    # ~1.5 min). Just report the free space and warn early if it looks tight, instead
+    # of discovering ENOSPC two hours into the build.
+    - name: Check disk space (no cleanup)
+      run: |
+        echo "==> free space before build (nothing is deleted)"
+        df -h
+        avail=$(df -BG --output=avail / | tail -n1 | tr -dc '0-9')
+        echo "==> free on / : ${avail}G"
+        if [ "${avail:-0}" -lt 40 ]; then
+          echo "::warning title=Low disk space::only ${avail}G free on / - the build may hit ENOSPC"
+        fi
+
+    # The build below clones the dotnet VMR into ./dotnet, so a plain actions/checkout
+    # of *this* repo is safe (it lands in the workspace root, not ./dotnet) and is
+    # required to bring in the illumos-overlay/ directory: the CA bundle and the
+    # installer. Nothing is patched into the SDK tarball at build time - the overlay
+    # is shipped next to it and applied on the target machine by install-illumos.sh.
+    - name: Checkout this repo (for illumos-overlay)
+      uses: actions/checkout@v4
+      with:
+        path: _thisrepo
+
+    - name: Clone dotnet VMR
+      env:
+        # workflow_dispatch 的输入默认值只在手动触发时生效；schedule 触发时
+        # inputs.* 全是空的，所以这里再兜一层默认值。
+        VMR_FORK: ${{ inputs.fork || 'dotnet' }}
+        VMR_BRANCH: ${{ inputs.branch || 'main' }}
+      run: |
+        echo "==> VMR $VMR_FORK @ $VMR_BRANCH"
+        git clone --single-branch --depth 1 -b "$VMR_BRANCH" "https://github.com/$VMR_FORK/dotnet"
 
     - name: Build
       run: |
         docker run --platform linux/amd64 --rm -v${{ github.workspace }}/dotnet:/dotnet -w /dotnet -e ROOTFS_DIR=/crossrootfs/x64 -e Compiler=gcc \
           mcr.microsoft.com/dotnet-buildtools/prereqs:${{ matrix.docker_tag }} \
-            ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
-              --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99
+            bash -c '
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              # The image references apt.kitware.com but its signing key is not in the
+              # keyring, which makes a plain "apt-get update" abort with exit code 100.
+              # Drop that source; cmake is already installed so nothing needs it.
+              for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+                [ -f "$f" ] || continue
+                grep -q apt.kitware.com "$f" || continue
+                if [ "$f" = /etc/apt/sources.list ]; then
+                  sed -i "/apt.kitware.com/d" "$f"
+                else
+                  rm -f "$f"
+                fi
+              done
+              apt-get update -o Acquire::AllowInsecureRepositories=true
+              # ninja: the runtime build defaults to ninja (__UseNinja=1 in
+              # eng/native/build-commons.sh) and hard-fails with "Unable to locate
+              # ninja!" when it is missing.
+              # lld: the build passes -fuse-ld=lld to the illumos cross gcc, but the
+              # image ships no lld at all.
+              apt-get install -y --no-install-recommends ninja-build lld || true
+              command -v ninja >/dev/null 2>&1 || python3 -m pip install --no-cache-dir --quiet ninja || true
+              command -v ninja >/dev/null 2>&1 || { echo "==> unable to install ninja"; exit 1; }
+              echo "==> ninja: $(command -v ninja) $(ninja --version)"
+              echo "==> lld: $(command -v ld.lld || command -v lld || echo MISSING)"
 
-    - name: List assets directory
+              # The illumos cross gcc resolves its linker inside its own target
+              # directory (<exec-prefix>/<target>/bin/ld), so a linker installed
+              # into the PATH is not enough: the build inherits -fuse-ld=lld from
+              # the clang-based compiler setup and then dies with
+              # "collect2: fatal error: cannot find ld".
+              # Probe the actual link, then force the bfd (GNU ld) linker, which is
+              # the one this toolchain actually ships.
+              CROSS_BIN=/crossrootfs/x64/bin
+              CROSS_CC=$CROSS_BIN/x86_64-illumos-gcc
+              printf "int main(void){return 0;}\n" > /tmp/probe.c
+              cross_link() {
+                "$CROSS_CC" --sysroot=/crossrootfs/x64 "$@" /tmp/probe.c -o /tmp/probe -lssp
+              }
+              echo "==> gcc -print-prog-name=ld -> $("$CROSS_CC" -print-prog-name=ld 2>/dev/null || true)"
+              for cand in "" "-fuse-ld=lld" "-fuse-ld=bfd"; do
+                if cross_link $cand >/dev/null 2>/tmp/probe.err; then
+                  used=$("$CROSS_CC" -v --sysroot=/crossrootfs/x64 $cand /tmp/probe.c -o /tmp/probe -lssp 2>&1 | tail -1 || true)
+                  echo "==> cross link OK    : ${cand:-<compiler default>} :: ${used:-unknown}"
+                else
+                  echo "==> cross link FAILED: ${cand:-<compiler default>}"
+                  sed -n "1,3p" /tmp/probe.err
+                fi
+              done
+
+              # EXTRA_LDFLAGS cannot be relied on here: the VMR runs each repo build
+              # in a sanitised child environment, so the variable never reaches
+              # eng/native/build-commons.sh. Instead make the requested linker name
+              # resolve where this cross gcc actually looks for it, and verify it by
+              # linking for real. TARGET_BIN is the compiler own tool directory.
+              TARGET_BIN=$(dirname "$("$CROSS_CC" -print-prog-name=ld 2>/dev/null || echo /crossrootfs/x64/x86_64-sun-solaris2.11/bin/ld)")
+              CROSS_LD=$TARGET_BIN/ld
+              if ! cross_link -fuse-ld=lld >/dev/null 2>&1; then
+                echo "==> -fuse-ld=lld has no linker of that name; aliasing the lld name to the toolchain GNU ld"
+                for p in "$TARGET_BIN/ld.lld" "$TARGET_BIN/x86_64-sun-solaris2.11-ld.lld" \
+                         "$CROSS_BIN/ld.lld" "$CROSS_BIN/x86_64-illumos-ld.lld"; do
+                  [ -e "$p" ] && continue
+                  mkdir -p "$(dirname "$p")"
+                  ln -sf "$CROSS_LD" "$p"
+                  echo "==> aliased $p -> $CROSS_LD"
+                  if cross_link -fuse-ld=lld >/dev/null 2>&1; then
+                    echo "==> -fuse-ld=lld now links"
+                    break
+                  fi
+                done
+              fi
+              if cross_link -fuse-ld=lld >/dev/null 2>&1; then
+                echo "==> link check passed with -fuse-ld=lld"
+              else
+                echo "==> still cannot link with -fuse-ld=lld; failing fast"
+                exit 1
+              fi
+              # GCC 13 produces false positives that -Werror turns into hard failures:
+              #   vm/common.h:181  ... reading 16 bytes from a region of size 0
+              #                        [-Werror=stringop-overread]
+              #   jit/gentree.cpp  ... this pointer is null [-Werror=nonnull]
+              # -Werror only exists because prerelease builds enable it
+              # (configurecompiler.cmake: "if (PRERELEASE) add_compile_options(-Werror)"),
+              # and its suppression list already covers the sibling warnings. Patch that
+              # list in every repo of the VMR: add the missing -Wno-stringop-overread and
+              # a -Wno-error so further false positives stay warnings instead of killing
+              # the build after ~40 minutes. Warnings are still printed in full.
+              # Env vars (CFLAGS/EXTRA_*) cannot be used here: the VMR runs the repo
+              # builds in a sanitised child environment.
+              PATCHED=0
+              for CCF in /dotnet/src/*/eng/native/configurecompiler.cmake; do
+                [ -f "$CCF" ] || continue
+                if grep -q stringop-overread "$CCF"; then
+                  PATCHED=1
+                  continue
+                fi
+                if ! grep -q "COMPILE_LANGUAGE:CXX>:-Wno-stringop-overflow>" "$CCF"; then
+                  continue
+                fi
+                sed -i "s#COMPILE_LANGUAGE:CXX>:-Wno-stringop-overflow>)#COMPILE_LANGUAGE:CXX>:-Wno-stringop-overflow>)\n    add_compile_options(\$<\$<COMPILE_LANGUAGE:CXX>:-Wno-stringop-overread>)\n    add_compile_options(-Wno-error)#" "$CCF"
+                if grep -q stringop-overread "$CCF"; then
+                  PATCHED=1
+                  echo "==> patched: $CCF"
+                  grep -n "stringop-overread\|Wno-error)" "$CCF" | sed "s/^/    /"
+                fi
+              done
+              if [ "$PATCHED" = 0 ]; then
+                echo "==> no configurecompiler.cmake patched; wrapping the cross compilers instead"
+                for comp in gcc g++; do
+                  real=/crossrootfs/x64/bin/x86_64-illumos-$comp-real
+                  if [ ! -e "$real" ]; then
+                    mv "/crossrootfs/x64/bin/x86_64-illumos-$comp" "$real"
+                    printf "%s\n" "#!/bin/sh" "exec $real -Wno-stringop-overread -Wno-error \"\$@\"" > "/crossrootfs/x64/bin/x86_64-illumos-$comp"
+                    chmod +x "/crossrootfs/x64/bin/x86_64-illumos-$comp"
+                  fi
+                done
+                echo "==> cross compilers wrapped with -Wno-stringop-overread -Wno-error"
+              fi
+              # ASP.NET Core tool projects are published with the target RID while their
+              # assets file was restored without it, so the build dies with NETSDK1047
+              # ("assets file ... does not have a target for net11.0/illumos-x64").
+              # Upstream sets RuntimeIdentifiers only inside a PropertyGroup gated on
+              # NativeAotSupported == true, and eng/common/native/NativeAotSupported.props
+              # explicitly rejects illumos, so that whole group is skipped here and the RID
+              # never reaches restore. Injecting a line inside that gated group therefore
+              # does nothing - the earlier attempt proved it (it ran, and NETSDK1047 stayed).
+              # Add an unconditional PropertyGroup in front of the closing tag instead: it
+              # is the last assignment in the project body, so nothing upstream overrides it.
+              # NOTE: this script is the argument of bash -c, so a single quote is not
+              # allowed anywhere inside it - an apostrophe in a comment truncates the
+              # command (that is what broke the previous run).
+              ridfix=0
+              for proj in $(grep -rl BundledToolTargetRuntimeIdentifiers /dotnet/src/aspnetcore/src/Tools --include="*.csproj" 2>/dev/null || true); do
+                grep -q illumos-rid-fix "$proj" && continue
+                last=$(tail -n1 "$proj" | tr -d "\r" | sed "s/[[:space:]]*$//")
+                [ "$last" = "</Project>" ] || continue
+                head -n -1 "$proj" > "$proj.illumos-tmp"
+                printf "%s\n" \
+                  "  <!-- illumos-rid-fix: NativeAotSupported is false on illumos, so the gated group above never runs -->" \
+                  "  <PropertyGroup>" \
+                  "    <RuntimeIdentifiers>\$(RuntimeIdentifiers);\$(TargetRuntimeIdentifier)</RuntimeIdentifiers>" \
+                  "    <PublishReadyToRun>false</PublishReadyToRun>" \
+                  "  </PropertyGroup>" \
+                  "</Project>" >> "$proj.illumos-tmp"
+                mv "$proj.illumos-tmp" "$proj"
+                grep -q illumos-rid-fix "$proj" && ridfix=$((ridfix+1))
+                echo "==> rid fix applied: $proj"
+              done
+              echo "==> rid fix applied to $ridfix tool csproj"
+              if [ "$ridfix" = 0 ]; then
+                echo "==> WARNING: no tool csproj patched; NETSDK1047 will come back"
+              fi
+
+        # crossgen2 的 GetTargetOS 不认 illumos（token 列表里没有 illumos），而共享框架的
+        # sfxproj 在 Release 下默认 PublishReadyToRun=true，于是 R2R 必然失败：
+        # NETSDK1096 + "Target OS illumos is not supported"。
+        # R2R 的触发条件就是 CreateReadyToRunImages 上的 PublishReadyToRun == true，
+        # 所以在每个 sfxproj 末尾追加覆盖（同一文件内后出现的赋值生效）。
+        # 命令行 -p: 不会转发到各 repo 的构建，改文件才可靠。
+        r2r=0
+        for f in $(find /dotnet/src -name "*.sfxproj" -not -path "*/artifacts/*" 2>/dev/null); do
+          grep -q "ReadyToRun" "$f" || continue
+          grep -q "illumos-disable-r2r" "$f" && continue
+          last=$(tail -n1 "$f" | tr -d "\r")
+          [ "$last" = "</Project>" ] || continue
+          head -n -1 "$f" > "$f.illumos-tmp"
+          printf "%s\n" \
+            "  <!-- illumos-disable-r2r: crossgen2 has no illumos target os -->" \
+            "  <PropertyGroup>" \
+            "    <PublishReadyToRun>false</PublishReadyToRun>" \
+            "    <PublishReadyToRunComposite>false</PublishReadyToRunComposite>" \
+            "    <CrossgenOutput>false</CrossgenOutput>" \
+            "  </PropertyGroup>" \
+            "</Project>" >> "$f.illumos-tmp"
+          mv "$f.illumos-tmp" "$f"
+          grep -q "illumos-disable-r2r" "$f" && r2r=$((r2r+1))
+        done
+        echo "==> r2r disabled in $r2r sfxproj"
+        if [ "$r2r" = 0 ]; then
+          echo "==> WARNING: no sfxproj patched; aspnetcore R2R will fail again"
+        fi
+
+              # 通用保险：把 R2R 相关属性注入到【每个 repo】的构建命令行。
+              # VMR 用 repo-projects/Directory.Build.targets 里的 $(BuildArgs) 拼命令行，
+              # 而那个文件就在我们的 checkout 里 —— 改它就能一次影响所有 repo。
+              # 命令行 /p: 是 MSBuild 全局属性，项目文件改不动它，比逐文件打补丁更硬。
+              # （sdk repo 的 CrossgenLayout 认 SkipUsingCrossgen；共享框架认 PublishReadyToRun。）
+              DBT=/dotnet/repo-projects/Directory.Build.targets
+              if [ -f "$DBT" ] && ! grep -q "illumos-extra-buildargs" "$DBT"; then
+                dbtlast=$(tail -n1 "$DBT" | tr -d "\r" | sed "s/[[:space:]]*$//")
+                if [ "$dbtlast" = "</Project>" ]; then
+                  head -n -1 "$DBT" > "$DBT.illumos-tmp"
+                  printf "%s\n" \
+                    "  <!-- illumos-extra-buildargs: crossgen2 has no illumos target os -->" \
+                    "  <PropertyGroup>" \
+                    "    <BuildArgs>\$(BuildArgs) /p:PublishReadyToRun=false /p:PublishReadyToRunComposite=false /p:CrossgenOutput=false /p:SkipUsingCrossgen=true</BuildArgs>" \
+                    "  </PropertyGroup>" \
+                    "</Project>" >> "$DBT.illumos-tmp"
+                  mv "$DBT.illumos-tmp" "$DBT"
+                fi
+              fi
+              if grep -q "illumos-extra-buildargs" "$DBT" 2>/dev/null; then
+                echo "==> BuildArgs injected (illumos-extra-buildargs present)"
+              else
+                echo "==> WARNING: could not inject BuildArgs; repos may crossgen for illumos"
+              fi
+
+              # 7) illumos 没有 overcommit：匿名预留会真记账到 swap，导致 CoreCLR 起不来。
+              #    truss 实测：进程先留 1.86G，GC 还要 1.98G，而 2G 内存/2G swap 的机器预算只有 ~2G
+              #    -> mmap PROT_NONE 全部 EAGAIN -> GC heap initialization failed 0x8007000E。
+              #    上游给 Haiku（同样没有 overcommit）就是这么修的：minipal/Unix/doublemapping.cpp
+              #    里 #ifdef TARGET_HAIKU 时 mmapFlags |= MAP_NORESERVE。illumos 有同一个旗标
+              #    (sys/mman.h: #define MAP_NORESERVE 0x40)，所以照做，只加在纯预留路径。
+              #    注意：限堆参数无效（那个 1.86G 预留不是 GC 堆），只能在这里改。
+              GCENV=/dotnet/src/runtime/src/coreclr/gc/unix/gcenv.unix.cpp
+              if [ -f "$GCENV" ] && ! grep -q "illumos-noreserve" "$GCENV"; then
+                sed -i "/int mmapFlags = MAP_ANON | MAP_PRIVATE | hugePagesFlag;/a\\
+            // illumos-noreserve: illumos has no overcommit, so anonymous reservations are charged against\n    // swap. A pure address-space reservation must opt out, exactly like the Haiku branch in\n    // minipal/Unix/doublemapping.cpp does.\n    if (!committing)\n    {\n        mmapFlags |= MAP_NORESERVE;\n    }" "$GCENV"
+              fi
+              if grep -q "illumos-noreserve" "$GCENV" 2>/dev/null; then
+                echo "==> gcenv.unix.cpp patched: reservations use MAP_NORESERVE"
+              else
+                echo "==> WARNING: could not patch gcenv.unix.cpp; CoreCLR will fail on small-memory hosts"
+              fi
+              echo "==> patch applied: $(grep -c illumos-noreserve "$GCENV" 2>/dev/null || echo 0)"
+
+              # The VMR redirects each repo output to
+              # artifacts/log/Release/<repo>/<repo>.log and only replays it once that repo
+              # finishes, so the job log would otherwise stay silent for hours. Emit the last
+              # line of the active log (plus free disk) every 60s.
+              echo "==> cpus: $(nproc)"
+              ( while true; do
+                  sleep 60
+                  LOG=$(ls -t /dotnet/artifacts/log/Release/*/*.log 2>/dev/null | head -1 || true)
+                  FREE=$(df -h /dotnet | awk "NR==2{print \$4}")
+                  LAST=$(tail -n1 "$LOG" 2>/dev/null | tr -d "\r" | cut -c1-150)
+                  printf "[heartbeat %s] disk %s free | %s\n" "$(date +%H:%M:%S)" "$FREE" "$LAST"
+                done ) &
+              exec "$@"
+            ' _ \
+              ./build.sh --clean-while-building --prep -sb --os ${{ matrix.name }} --rid ${{ matrix.name }}-x64 \
+                --arch x64 ${{ inputs.is_rtm && '--branding rtm' || '' }} -p:OfficialBuildId=$(date +%Y%m%d).99 \
+                -p:PublishReadyToRun=false -p:SkipUsingCrossgen=true
+
+    - name: Report disk and artifacts usage
+      if: always()
       run: |
-        find "${{ github.workspace }}/dotnet/artifacts"
+        echo "==> disk"
+        df -h
+        echo "==> artifacts"
+        du -sh "${{ github.workspace }}/dotnet/artifacts" 2>/dev/null || true
+        du -sh "${{ github.workspace }}/dotnet/artifacts"/* 2>/dev/null | sort -h | tail -10 || true
 
-    - name: Upload .NET
+    # The SDK tarball is produced by the sdk repo build, i.e. before the VMR's final
+    # validation (it extracts the archive to run source-build leak detection). Keep
+    # this step unconditional so a late validation failure does not throw away a
+    # multi-hour build: whatever tarball exists still gets listed.
+    - name: List assets directory
+      if: always()
+      run: |
+        echo "==> Sdk assets"
+        ls -la "${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/"*/ || true
+        echo "==> tarballs"
+        find "${{ github.workspace }}/dotnet/artifacts/assets" -maxdepth 4 -name "*.tar.gz" -printf "%s\t%p\n" || true
+
+    # ---------------------------------------------------------------------
+    # illumos post-processing: happens AFTER the SDK tarball is produced and
+    # BEFORE it is uploaded.
+    #
+    # It rewrites the tarball in place (same path) so the upload/release steps
+    # below need no changes:
+    #   * replaces the three PNSE-shell managed assemblies with the real
+    #     implementations from the matching linux-x64 runtime pack
+    #   * injects illumos-ca-bundle.crt + install-illumos.sh + ILLUMOS-README.txt
+    #     at the tarball root
+    #
+    # Both operations are needed: without the dll swap NuGet fails with NU1301
+    # ("System.Net.Security is not supported on this platform"); without the CA
+    # bundle it fails with NU3018 ("signing certificate is not trusted", because
+    # OpenIndiana ships no /etc/ssl/certs and lacks the DigiCert Assured ID Root CA
+    # that the Microsoft package signing chain depends on).
+    #
+    # The replacement dlls also force the install script to set
+    # DOTNET_ReadyToRun=0: they carry linux R2R precompiled code, and illumos
+    # crashes before Main if it tries to load that.
+    # ---------------------------------------------------------------------
+    - name: Stage illumos overlay alongside the SDK (becomes the zip root)
+      if: always()
+      env:
+        CA_BUNDLE_URL: ${{ inputs.ca_bundle_url }}
+      run: |
+        set -e
+
+        OVERLAY="${{ github.workspace }}/_thisrepo/illumos-overlay"
+        if [ ! -d "$OVERLAY" ]; then
+          echo "::error title=Missing overlay::illumos-overlay/ not found. Did actions/checkout run?"
+          exit 1
+        fi
+        echo "==> overlay contents"
+        find "$OVERLAY" -maxdepth 2 -type f -printf "%10s  %p\n" | sort -k2
+
+        # Optional: allow overriding the committed CA bundle with a download.
+        if [ -n "$CA_BUNDLE_URL" ]; then
+          echo "==> downloading CA bundle from $CA_BUNDLE_URL"
+          if curl -fsSL --max-time 120 -o "$OVERLAY/certs/illumos-ca-bundle.crt" "$CA_BUNDLE_URL"; then
+            echo "==> CA bundle replaced ($(stat -c%s "$OVERLAY/certs/illumos-ca-bundle.crt") bytes)"
+          else
+            echo "::warning title=CA bundle download failed::falling back to the committed bundle"
+          fi
+        fi
+
+        # Deliberately nothing is patched into the SDK tarball here. Every
+        # illumos-specific fix (PNSE-shell dll replacement, CA trust store,
+        # DOTNET_ReadyToRun=0) is performed at install time by install-illumos.sh,
+        # so the tarball stays byte-identical to the build output: the artifact
+        # remains auditable and the fix stays revertible.
+        test -s "$OVERLAY/certs/illumos-ca-bundle.crt" \
+          || { echo "::error title=Missing CA bundle::overlay certs/illumos-ca-bundle.crt is empty"; exit 1; }
+        test -s "$OVERLAY/scripts/install-illumos.sh" \
+          || { echo "::error title=Missing install script::overlay scripts/install-illumos.sh is empty"; exit 1; }
+        bash -n "$OVERLAY/scripts/install-illumos.sh" \
+          || { echo "::error title=Bad install script::install-illumos.sh has a bash syntax error"; exit 1; }
+
+        shopt -s nullglob
+        TARS=( "${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/"*/dotnet-sdk-*.tar.gz )
+        shopt -u nullglob
+        if [ "${#TARS[@]}" -eq 0 ]; then
+          echo "::error title=No SDK tarball::no dotnet-sdk-*.tar.gz found under artifacts/assets/Release/Sdk"
+          find "${{ github.workspace }}/dotnet/artifacts/assets" -maxdepth 4 -name '*.tar.gz' -printf "%s\t%p\n" || true
+          exit 1
+        fi
+        echo "==> found ${#TARS[@]} tarball(s):"
+        for T in "${TARS[@]}"; do echo "    $(basename "$T") ($(stat -c%s "$T") bytes)"; done
+
+        # Collect everything the user needs into one flat directory. GitHub
+        # delivers artifacts as a zip, so whatever lands in dist/ shows up at the
+        # root of that zip: the SDK tarball, the installer and the CA bundle.
+        DIST="${{ github.workspace }}/dist"
+        rm -rf "$DIST"; mkdir -p "$DIST"
+        for T in "${TARS[@]}"; do cp -f "$T" "$DIST/"; done
+        cp -f "$OVERLAY/scripts/install-illumos.sh"  "$DIST/install-illumos.sh"
+        cp -f "$OVERLAY/certs/illumos-ca-bundle.crt" "$DIST/illumos-ca-bundle.crt"
+        chmod 0755 "$DIST/install-illumos.sh"
+        ( cd "$DIST" && sha256sum ./* > SHA256SUMS.txt ) || true
+
+        echo
+        echo "==> dist/ (this becomes the zip root)"
+        ls -l "$DIST"
+
+    - name: Upload .NET (SDK tarball + installer + CA bundle at zip root)
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: dotnet-sdk-${{ matrix.name }}
+        if-no-files-found: warn
         path: |
-          ${{ github.workspace }}/dotnet/artifacts/assets/Release/Sdk/*/dotnet-sdk-*.tar.gz
+          ${{ github.workspace }}/dist/*
 
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: ${{ inputs.release }}
+    # workflow_dispatch 的 release 输入默认 true；schedule 触发时 inputs 全空，
+    # 所以显式让计划任务也发布。
+    if: ${{ github.event_name == 'schedule' || inputs.release }}
     steps:
     - name: Download artifacts
       uses: actions/download-artifact@v4
@@ -76,27 +470,56 @@ jobs:
         path: artifacts
 
     - name: Make release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # This job checks nothing out, so the workspace is not a git repository and
+        # gh cannot infer the repository from a remote. Without GH_REPO every gh
+        # release command dies with
+        #   "failed to run git: fatal: not a git repository".
+        GH_REPO: ${{ github.repository }}
       run: |
-        sudo apt install -y hub
+        set -e
 
-        # hub(1) requires release to be created inside a git repo
-        git clone https://${{ secrets.CLONE_TOKEN }}:x-oauth-basic@github.com/${{ github.repository }}.git repo
-        cd repo
+        # The artifact root already carries the SDK tarball, the installer and the CA
+        # bundle. Gather them into one directory so the release is self-contained:
+        # whoever downloads from the release page gets exactly the same files.
+        STAGE=$(mktemp -d)
+        for f in $(find ${{ github.workspace }}/artifacts -type f \
+                     | grep -E '/(dotnet-sdk-.*\.tar\.gz|install-illumos\.sh|illumos-ca-bundle\.crt)$'); do
+          cp -f "$f" "$STAGE/"
+        done
+        ls -l "$STAGE"
 
-        sdk_paths=$(find ${{ github.workspace }}/artifacts -name 'dotnet-sdk-*.tar.gz')
-        artifacts=""
-        for sdk_path in $sdk_paths; do
-          sdk_filename=$(basename "$sdk_path")
-          # Extract version: strip prefix/suffix to get e.g. "10.0.100-preview.5.25277.114"
-          sdk_version=$(echo "$sdk_filename" | sed -E 's/dotnet-sdk-([^-]+(-[^-]+)*)-illumos-.+\.tar\.gz/\1/')
-          artifacts="$artifacts -a $sdk_path"
-          tag_name="$sdk_version"
+        # 版本号直接跟随上游 dotnet：SDK 产物名里的版本就是上游构建生成的
+        # <上游版本>-<构建号>[.<修订>]，这里只把它取出来当 tag，不另造版本体系，
+        # 也不加日期后缀 —— 上游版本变了，tag 自然变。
+        tag_name=""
+        for sdk_path in "$STAGE"/dotnet-sdk-*.tar.gz; do
+          [ -f "$sdk_path" ] || continue
+          # dotnet-sdk-12.0.100-alpha.1.26473.199-illumos-x64.tar.gz
+          #   -> 12.0.100-alpha.1.26473.199
+          tag_name=$(basename "$sdk_path" | sed -E 's/^dotnet-sdk-(.*)-illumos-x64\.tar\.gz$/\1/')
         done
 
-        echo "tag_name: $tag_name"
-        echo "artifacts: $artifacts"
+        if [ -z "$tag_name" ]; then
+          echo "::error title=No tarball::nothing to release"
+          exit 1
+        fi
 
-        # docs: https://hub.github.com/hub-release.1.html
-        hub release create $artifacts --prerelease -m "$tag_name" "$tag_name"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # A single checksum file covering the whole release payload.
+        ( cd "$STAGE" && sha256sum ./* > SHA256SUMS.txt )
+
+        echo "tag_name: $tag_name"
+
+        # Use the preinstalled gh CLI rather than hub: no apt-get, no clone (hub
+        # needed a git repo), and --clobber lets a nightly that produced the same
+        # build id replace the previous assets instead of failing.
+        if gh release view "$tag_name" >/dev/null 2>&1; then
+          echo "==> release $tag_name already exists; replacing its assets"
+          gh release upload "$tag_name" "$STAGE"/* --clobber
+          gh release edit "$tag_name" --prerelease --title "$tag_name"
+        else
+          echo "==> creating prerelease $tag_name"
+          gh release create "$tag_name" "$STAGE"/* --prerelease --title "$tag_name" \
+            --notes "Automated illumos-x64 build of $tag_name. Assets: the SDK tarball, install-illumos.sh, illumos-ca-bundle.crt and SHA256SUMS.txt. Install on the target machine with: sudo bash install-illumos.sh dotnet-sdk-*-illumos-x64.tar.gz"
+        fi

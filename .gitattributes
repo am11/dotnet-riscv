@@ -1,0 +1,12 @@
+# Shell scripts are executed on illumos/Linux; a CRLF would make them unrunnable
+# ("bad interpreter" / stray \r in every command). Pin LF regardless of the
+# committer's core.autocrlf setting.
+*.sh   text eol=lf
+*.bash text eol=lf
+
+# CA bundle is parsed by OpenSSL on the target; keep it byte-stable too.
+*.crt  text eol=lf
+
+# Workflows run on ubuntu-latest; LF keeps diffs and shell heredocs sane.
+*.yml  text eol=lf
+*.yaml text eol=lf
